@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Top Ahorro Gasolinera - Precios de Combustible en España</title>
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-tertiary: #334155;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-gold: #fbbf24;
+      --accent-silver: #94a3b8;
+      --accent-bronze: #d97706;
+      --accent-green: #22c55e;
+      --accent-blue: #3b82f6;
+      --accent-red: #ef4444;
+      --border-color: #334155;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+      --radius: 8px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      z-index: 1000;
+      position: relative;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-gold), var(--accent-bronze));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .header-center {
+      flex: 1;
+      max-width: 400px;
+    }
+
+    .search-box {
+      position: relative;
+      width: 100%;
+    }
+
+    .search-box input {
+      width: 100%;
+      padding: 10px 16px 10px 40px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      color: var(--text-primary);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-box input:focus {
+      border-color: var(--accent-blue);
+    }
+
+    .search-box input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 16px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 13px;
+    }
+
+    .cache-info {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      color: var(--text-secondary);
+    }
+
+    .cache-info .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      animation: pulse 2s infinite;
+    }
+
+    .cache-info.stale .dot {
+      background: var(--accent-red);
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .btn-refresh {
+      padding: 8px 16px;
+      background: var(--accent-blue);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: background 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-refresh:hover {
+      background: #2563eb;
+    }
+
+    .btn-refresh:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Main layout */
+    .main {
+      display: flex;
+      height: calc(100vh - 61px);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 420px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: transform 0.3s;
+    }
+
+    .sidebar.collapsed {
+      transform: translateX(-420px);
+      margin-right: -420px;
+    }
+
+    .sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .sidebar-title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .sidebar-toggle {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 18px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .sidebar-toggle:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .province-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .province-list::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .province-list::-webkit-scrollbar-track {
+      background: var(--bg-primary);
+    }
+
+    .province-list::-webkit-scrollbar-thumb {
+      background: var(--bg-tertiary);
+      border-radius: 3px;
+    }
+
+    .province-item {
+      padding: 12px;
+      margin-bottom: 4px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.2s;
+      border-left: 3px solid transparent;
+    }
+
+    .province-item:hover {
+      background: #3b4c63;
+      transform: translateX(4px);
+    }
+
+    .province-item.active {
+      background: #3b4c63;
+      border-left-color: var(--accent-blue);
+    }
+
+    .province-item.top-gold {
+      border-left-color: var(--accent-gold);
+      background: linear-gradient(135deg, rgba(251, 191, 36, 0.1), transparent);
+    }
+
+    .province-item.top-silver {
+      border-left-color: var(--accent-silver);
+      background: linear-gradient(135deg, rgba(148, 163, 184, 0.1), transparent);
+    }
+
+    .province-item.top-bronze {
+      border-left-color: var(--accent-bronze);
+      background: linear-gradient(135deg, rgba(217, 119, 6, 0.1), transparent);
+    }
+
+    .province-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .province-name {
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .province-rank {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+    }
+
+    .rank-gold {
+      background: rgba(251, 191, 36, 0.2);
+      color: var(--accent-gold);
+    }
+
+    .rank-silver {
+      background: rgba(148, 163, 184, 0.2);
+      color: var(--accent-silver);
+    }
+
+    .rank-bronze {
+      background: rgba(217, 119, 6, 0.2);
+      color: var(--accent-bronze);
+    }
+
+    .province-prices {
+      display: flex;
+      gap: 16px;
+      font-size: 13px;
+    }
+
+    .price-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .price-label {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .price-value {
+      font-weight: 600;
+      font-family: 'Courier New', monospace;
+    }
+
+    .price-gasolina {
+      color: var(--accent-green);
+    }
+
+    .price-diesel {
+      color: var(--accent-blue);
+    }
+
+    .province-stations-count {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Station detail panel */
+    .station-detail {
+      border-top: 1px solid var(--border-color);
+      max-height: 300px;
+      overflow-y: auto;
+      display: none;
+    }
+
+    .station-detail.visible {
+      display: block;
+    }
+
+    .station-detail-header {
+      padding: 12px 16px;
+      background: var(--bg-tertiary);
+      font-weight: 600;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .station-list {
+      padding: 8px;
+    }
+
+    .station-item {
+      padding: 10px 12px;
+      margin-bottom: 4px;
+      background: var(--bg-primary);
+      border-radius: 6px;
+      font-size: 13px;
+      border-left: 3px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .station-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .station-item.top-1 {
+      border-left-color: var(--accent-gold);
+      background: linear-gradient(90deg, rgba(251, 191, 36, 0.15), transparent);
+    }
+
+    .station-item.top-2 {
+      border-left-color: var(--accent-silver);
+      background: linear-gradient(90deg, rgba(148, 163, 184, 0.15), transparent);
+    }
+
+    .station-item.top-3 {
+      border-left-color: var(--accent-bronze);
+      background: linear-gradient(90deg, rgba(217, 119, 6, 0.15), transparent);
+    }
+
+    .station-name {
+      font-weight: 600;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .station-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+    }
+
+    .badge-gold {
+      background: rgba(251, 191, 36, 0.3);
+      color: var(--accent-gold);
+    }
+
+    .badge-silver {
+      background: rgba(148, 163, 184, 0.3);
+      color: var(--accent-silver);
+    }
+
+    .badge-bronze {
+      background: rgba(217, 119, 6, 0.3);
+      color: var(--accent-bronze);
+    }
+
+    .station-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .station-address {
+      color: var(--text-muted);
+      font-size: 12px;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .station-prices {
+      display: flex;
+      gap: 12px;
+      font-family: 'Courier New', monospace;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    /* Map */
+    .map-container {
+      flex: 1;
+      position: relative;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Loading overlay */
+    .loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(15, 23, 42, 0.9);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      gap: 16px;
+    }
+
+    .loading-overlay.hidden {
+      display: none;
+    }
+
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid var(--bg-tertiary);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    /* Error banner */
+    .error-banner {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent-red);
+      color: white;
+      padding: 12px 24px;
+      border-radius: var(--radius);
+      font-size: 14px;
+      z-index: 1001;
+      display: none;
+      box-shadow: var(--shadow);
+      max-width: 90%;
+      text-align: center;
+    }
+
+    .error-banner.visible {
+      display: block;
+    }
+
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-muted);
+      gap: 12px;
+      padding: 40px;
+      text-align: center;
+    }
+
+    .empty-state-icon {
+      font-size: 48px;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .sidebar {
+        position: absolute;
+        z-index: 999;
+        width: 100%;
+        height: 50%;
+        bottom: 0;
+        right: 0;
+        border-right: none;
+        border-top: 1px solid var(--border-color);
+        transform: translateY(0);
+      }
+
+      .sidebar.collapsed {
+        transform: translateY(100%);
+        margin-right: 0;
+      }
+
+      .header {
+        padding: 8px 12px;
+      }
+
+      .logo {
+        font-size: 16px;
+      }
+
+      .logo-subtitle {
+        display: none;
+      }
+
+      .header-center {
+        order: 3;
+        max-width: 100%;
+        width: 100%;
+      }
+
+      .header-right {
+        gap: 8px;
+      }
+
+      .cache-info span {
+        display: none;
+      }
+    }
+
+    /* Custom Leaflet styles */
+    .leaflet-popup-content-wrapper {
+      background: var(--bg-secondary) !important;
+      color: var(--text-primary) !important;
+      border-radius: var(--radius) !important;
+      box-shadow: var(--shadow) !important;
+    }
+
+    .leaflet-popup-tip {
+      background: var(--bg-secondary) !important;
+    }
+
+    .leaflet-popup-content {
+      margin: 12px !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+    }
+
+    .popup-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    .popup-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      font-size: 13px;
+    }
+
+    .popup-label {
+      color: var(--text-muted);
+    }
+
+    .popup-value {
+      font-weight: 600;
+      font-family: 'Courier New', monospace;
+    }
+
+    .popup-divider {
+      height: 1px;
+      background: var(--border-color);
+      margin: 6px 0;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div>
+        <div class="logo">⛽ Top Ahorro Gasolinera</div>
+        <div class="logo-subtitle">Precios de combustible en España</div>
+      </div>
+    </div>
+    
+    <div class="header-center">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInput" placeholder="Buscar provincia..." autocomplete="off">
+      </div>
+    </div>
+    
+    <div class="header-right">
+      <div class="cache-info" id="cacheInfo">
+        <span class="dot"></span>
+        <span id="cacheText">Actualizando...</span>
+      </div>
+      <button class="btn-refresh" id="btnRefresh" onclick="app.refreshData()">
+        🔄 Actualizar
+      </button>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <div class="main">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">📊 Precios por provincia</span>
+        <button class="sidebar-toggle" onclick="app.toggleSidebar()">◀</button>
+      </div>
+      
+      <div class="province-list" id="provinceList">
+        <div class="empty-state">
+          <div class="empty-state-icon">⏳</div>
+          <div>Cargando datos...</div>
+        </div>
+      </div>
+      
+      <div class="station-detail" id="stationDetail">
+        <div class="station-detail-header">
+          <span>📍 Estaciones en esta provincia</span>
+          <button class="sidebar-toggle" onclick="app.closeStationDetail()">✕</button>
+        </div>
+        <div class="station-list" id="stationList"></div>
+      </div>
+    </aside>
+
+    <!-- Map -->
+    <div class="map-container">
+      <div id="map"></div>
+      
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <div class="loading-text">Obteniendo precios de MINETUR...</div>
+      </div>
+      
+      <div class="error-banner" id="errorBanner"></div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <script>
+    // ============================================================
+    // COORDENADAS DE PROVINCias (centro aproximado)
+    // ============================================================
+    const PROVINCE_COORDS = {
+      'ALABA': { lat: 43.00, lng: -2.80 },
+      'ALBACETE': { lat: 38.99, lng: -1.86 },
+      'ALICANTE': { lat: 38.24, lng: -0.52 },
+      'ALMERIA': { lat: 36.78, lng: -2.39 },
+      'ASTURIAS': { lat: 43.36, lng: -5.84 },
+      'AVILA': { lat: 40.66, lng: -4.70 },
+      'BADAJOS': { lat: 38.72, lng: -6.04 },
+      'BARCELONA': { lat: 41.59, lng: 2.05 },
+      'BIZKAIA': { lat: 43.25, lng: -2.80 },
+      'BURGOS': { lat: 42.35, lng: -3.69 },
+      'CACERES': { lat: 39.48, lng: -6.00 },
+      'CADIZ': { lat: 36.52, lng: -6.29 },
+      'CASTELLON': { lat: 39.89, lng: -0.05 },
+      'CEUTA': { lat: 35.89, lng: -5.32 },
+      'CIUDAD REAL': { lat: 38.99, lng: -3.92 },
+      'CORDOBA': { lat: 37.88, lng: -4.78 },
+      'CUENCA': { lat: 40.07, lng: -2.13 },
+      'GIRONA': { lat: 41.98, lng: 2.82 },
+      'GRANADA': { lat: 37.18, lng: -3.60 },
+      'GUADALAJARA': { lat: 40.63, lng: -3.17 },
+      'GIPUZKOA': { lat: 43.15, lng: -2.30 },
+      'HUELVA': { lat: 37.25, lng: -6.94 },
+      'HUESCA': { lat: 42.14, lng: -0.40 },
+      'JAEN': { lat: 37.75, lng: -3.78 },
+      'LA RIOJA': { lat: 42.32, lng: -2.69 },
+      'LAS PALMAS': { lat: 28.00, lng: -15.50 },
+      'LEON': { lat: 42.62, lng: -5.57 },
+      'LERIDA': { lat: 41.62, lng: 0.63 },
+      'LUGO': { lat: 43.01, lng: -7.56 },
+      'MADRID': { lat: 40.42, lng: -3.70 },
+      'MALLORCA': { lat: 39.69, lng: 3.01 },
+      'MURCIA': { lat: 38.00, lng: -1.13 },
+      'NAVARRA': { lat: 42.82, lng: -1.69 },
+      'OURENSE': { lat: 42.34, lng: -7.85 },
+      'PALENCIA': { lat: 42.00, lng: -4.52 },
+      'PONTEVEDRA': { lat: 42.43, lng: -8.64 },
+      'SALAMANCA': { lat: 40.96, lng: -5.66 },
+      'TARRAGONA': { lat: 41.12, lng: 1.25 },
+      'TERUEL': { lat: 40.35, lng: -1.10 },
+      'TOLEDO': { lat: 39.86, lng: -4.02 },
+      'VALENCIA': { lat: 39.47, lng: -0.38 },
+      'VALLADOLID': { lat: 41.65, lng: -4.73 },
+      'VIZCAYA': { lat: 43.26, lng: -2.93 },
+      'ZAMORA': { lat: 41.50, lng: -5.75 },
+      'ZARAGOZA': { lat: 41.65, lng: -0.88 },
+      'MELILLA': { lat: 35.29, lng: -2.94 }
+    };
+
+    // ============================================================
+    // APLICACION PRINCIPAL
+    // ============================================================
+    const app = {
+      // Estado
+      data: null,
+      provinceData: new Map(),
+      selectedProvince: null,
+      map: null,
+      markersLayer: null,
+      provinceMarkers: new Map(),
+      cacheExpiry: null,
+      
+      // Constantes
+      API_URL: '/api/precios',
+      LOCAL_STORAGE_KEY: 'top-ahorro-gasolinera-data',
+      CACHE_DURATION_MS: 12 * 60 * 60 * 1000,
+      
+      // ============================================================
+      // INICIALIZACION
+      // ============================================================
+      init() {
+        this.initMap();
+        this.loadFromLocalStorage();
+        this.setupSearch();
+        this.setupAutoRefresh();
+        this.fetchData();
+      },
+      
+      // ============================================================
+      // MAPA LEAFLET
+      // ============================================================
+      initMap() {
+        this.map = L.map('map', {
+          center: [39.86, -3.50],
+          zoom: 6,
+          zoomControl: true,
+          attributionControl: true
+        });
+
+        // Capa oscura de mapa (CartoDB Dark Matter)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+          subdomains: 'abcd',
+          maxZoom: 19
+        }).addTo(this.map);
+
+        this.markersLayer = L.layerGroup().addTo(this.map);
+      },
+      
+      // ============================================================
+      // OBTENCION DE DATOS
+      // ============================================================
+      async fetchData(forceRefresh = false) {
+        this.showLoading(true);
+        this.hideError();
+        
+        try {
+          const response = await fetch(`${this.API_URL}${forceRefresh ? '?refresh=true' : ''}`);
+          
+          if (!response.ok) {
+            throw new Error(`Error HTTP: ${response.status}`);
+          }
+          
+          const result = await response.json();
+          
+          if (result.error) {
+            throw new Error(result.error);
+          }
+          
+          this.data = result.data;
+          this.cacheExpiry = result.cacheExpiry;
+          
+          // Actualizar UI de caché
+          this.updateCacheInfo(result.fromCache);
+          
+          // Procesar datos
+          this.processData();
+          
+          // Guardar en localStorage
+          this.saveToLocalStorage();
+          
+          // Actualizar mapa y tabla
+          this.renderMap();
+          this.renderProvinceList();
+          
+        } catch (err) {
+          console.error('Error fetching datos:', err);
+          this.showError(`Error al obtener datos: ${err.message}`);
+        } finally {
+          this.showLoading(false);
+        }
+      },
+      
+      refreshData() {
+        document.getElementById('btnRefresh').disabled = true;
+        this.fetchData(true).finally(() => {
+          document.getElementById('btnRefresh').disabled = false;
+        });
+      },
+      
+      // ============================================================
+      // PROCESAMIENTO DE DATOS
+      // ============================================================
+      processData() {
+        const stations = this.data.ListaEESSPrecio || [];
+        this.provinceData.clear();
+        
+        // Agrupar por provincia
+        stations.forEach(station => {
+          const prov = station.Provincia?.trim();
+          if (!prov) return;
+          
+          if (!this.provinceData.has(prov)) {
+            this.provinceData.set(prov, []);
+          }
+          
+          this.provinceData.get(prov).push({
+            nombre: station.Rutulo || 'Sin rútilo',
+            direccion: station.Direccion || '',
+            localidad: station.Localidad || '',
+            provincia: prov,
+            lat: parseFloat(station.Latitud) || 0,
+            lng: parseFloat(station['Longitud (WGS84)']) || 0,
+            gasolina95: parseFloat(station['Precio Gasolina 95 E5']) || null,
+            dieselA: parseFloat(station['Precio Gasoleo A']) || null,
+            horario: station.Horario || ''
+          });
+        });
+        
+        // Calcular promedios por provincia y ordenar
+        this.provinceAverages = Array.from(this.provinceData.entries())
+          .map(([prov, estations]) => {
+            const gasValid = estations.filter(s => s.gasolina95 !== null);
+            const dieselValid = estations.filter(s => s.dieselA !== null);
+            
+            return {
+              provincia: prov,
+              stations: estations.sort((a, b) => {
+                // Ordenar por gasolina95, luego por dieselA
+                if (a.gasolina95 !== null && b.gasolina95 !== null) {
+                  return a.gasolina95 - b.gasolina95;
+                }
+                if (a.dieselA !== null && b.dieselA !== null) {
+                  return a.dieselA - b.dieselA;
+                }
+                return 0;
+              }),
+              avgGasolina95: gasValid.length > 0 
+                ? gasValid.reduce((sum, s) => sum + s.gasolina95, 0) / gasValid.length 
+                : null,
+              avgDieselA: dieselValid.length > 0 
+                ? dieselValid.reduce((sum, s) => sum + s.dieselA, 0) / dieselValid.length 
+                : null,
+              minGasolina95: gasValid.length > 0 ? Math.min(...gasValid.map(s => s.gasolina95)) : null,
+              minDieselA: dieselValid.length > 0 ? Math.min(...dieselValid.map(s => s.dieselA)) : null,
+              maxGasolina95: gasValid.length > 0 ? Math.max(...gasValid.map(s => s.gasolina95)) : null,
+              maxDieselA: dieselValid.length > 0 ? Math.max(...dieselValid.map(s => s.dieselA)) : null,
+              count: estations.length
+            };
+          })
+          .filter(p => p.avgGasolina95 !== null || p.avgDieselA !== null)
+          .sort((a, b) => {
+            // Ordenar por promedio de gasolina95 (menor a mayor)
+            if (a.avgGasolina95 !== null && b.avgGasolina95 !== null) {
+              return a.avgGasolina95 - b.avgGasolina95;
+            }
+            if (a.avgDieselA !== null && b.avgDieselA !== null) {
+              return a.avgDieselA - b.avgDieselA;
+            }
+            return 0;
+          });
+      },
+      
+      // ============================================================
+      // RENDERIZADO DEL MAPA
+      // ============================================================
+      renderMap() {
+        this.markersLayer.clearLayers();
+        this.provinceMarkers.clear();
+        
+        const minGas = Math.min(...this.provinceAverages.map(p => p.avgGasolina95).filter(v => v !== null));
+        const maxGas = Math.max(...this.provinceAverages.map(p => p.avgGasolina95).filter(v => v !== null));
+        
+        // Marcadores de provincia (promedio)
+        this.provinceAverages.forEach(province => {
+          const coords = PROVINCE_COORDS[province.provincia.toUpperCase()];
+          if (!coords) return;
+          
+          const color = this.getPriceColor(province.avgGasolina95, minGas, maxGas);
+          const radius = 15000 + (province.count * 500); // Radio proporcional al número de estaciones
+          
+          const circle = L.circle(coords, {
+            radius: radius,
+            color: color,
+            fillColor: color,
+            fillOpacity: 0.4,
+            weight: 2,
+            opacity: 0.8
+          });
+          
+          circle.bindPopup(`
+            <div class="popup-title">${province.provincia}</div>
+            <div class="popup-row">
+              <span class="popup-label">Promedio Gasolina 95:</span>
+              <span class="popup-value" style="color: var(--accent-green)">${province.avgGasolina95?.toFixed(3)} €</span>
+            </div>
+            <div class="popup-row">
+              <span class="popup-label">Promedio Gasóleo A:</span>
+              <span class="popup-value" style="color: var(--accent-blue)">${province.avgDieselA?.toFixed(3)} €</span>
+            </div>
+            <div class="popup-divider"></div>
+            <div class="popup-row">
+              <span class="popup-label">Mín / Máx Gasolina:</span>
+              <span class="popup-value">${province.minGasolina95?.toFixed(3)} / ${province.maxGasolina95?.toFixed(3)}</span>
+            </div>
+            <div class="popup-row">
+              <span class="popup-label">Estaciones:</span>
+              <span class="popup-value">${province.count}</span>
+            </div>
+          `);
+          
+          circle.on('click', () => {
+            this.selectProvince(province.provincia);
+          });
+          
+          this.markersLayer.addLayer(circle);
+          this.provinceMarkers.set(province.provincia, circle);
+        });
+        
+        // Marcadores individuales de estaciones (solo cuando se selecciona una provincia)
+        this.updateStationMarkers();
+      },
+      
+      // ============================================================
+      // RENDERIZADO DE LA TABLA DE PROVINCIAS
+      // ============================================================
+      renderProvinceList() {
+        const container = document.getElementById('provinceList');
+        const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+        
+        // Filtrar provincias
+        const filtered = this.provinceAverages.filter(p => 
+          p.provincia.toLowerCase().includes(searchTerm)
+        );
+        
+        if (filtered.length === 0) {
+          container.innerHTML = `
+            <div class="empty-state">
+              <div class="empty-state-icon">🔍</div>
+              <div>No se encontraron provincias</div>
+            </div>
+          `;
+          return;
+        }
+        
+        // Determinar top 3
+        const top3 = filtered.slice(0, 3);
+        
+        container.innerHTML = filtered.map((province, index) => {
+          const isTop1 = province === top3[0];
+          const isTop2 = province === top3[1];
+          const isTop3 = province === top3[2];
+          const isActive = this.selectedProvince === province.provincia;
+          
+          let rankClass = '';
+          let rankBadge = '';
+          
+          if (isTop1) {
+            rankClass = 'top-gold';
+            rankBadge = '<span class="province-rank rank-gold">🥇 1º</span>';
+          } else if (isTop2) {
+            rankClass = 'top-silver';
+            rankBadge = '<span class="province-rank rank-silver">🥈 2º</span>';
+          } else if (isTop3) {
+            rankClass = 'top-bronze';
+            rankBadge = '<span class="province-rank rank-bronze">🥉 3º</span>';
+          }
+          
+          return `
+            <div class="province-item ${rankClass} ${isActive ? 'active' : ''}" 
+                 onclick="app.selectProvince('${province.provincia}')">
+              <div class="province-header">
+                <span class="province-name">${province.provincia}</span>
+                ${rankBadge}
+              </div>
+              <div class="province-prices">
+                <div class="price-item">
+                  <span class="price-label">Gasolina 95:</span>
+                  <span class="price-value price-gasolina">${province.avgGasolina95?.toFixed(3)} €</span>
+                </div>
+                <div class="price-item">
+                  <span class="price-label">Gasóleo A:</span>
+                  <span class="price-value price-diesel">${province.avgDieselA?.toFixed(3)} €</span>
+                </div>
+              </div>
+              <div class="province-stations-count">${province.count} estaciones · Mín: ${province.minGasolina95?.toFixed(3)} € · Máx: ${province.maxGasolina95?.toFixed(3)} €</div>
+            </div>
+          `;
+        }).join('');
+      },
+      
+      // ============================================================
+      // SELECCION DE PROVINCIA
+      // ============================================================
+      selectProvince(provincia) {
+        this.selectedProvince = provincia;
+        
+        // Actualizar estilo de la lista
+        document.querySelectorAll('.province-item').forEach(el => {
+          el.classList.remove('active');
+        });
+        
+        const items = document.querySelectorAll('.province-item');
+        items.forEach(el => {
+          if (el.textContent.includes(provincia)) {
+            el.classList.add('active');
+          }
+        });
+        
+        // Mostrar detalle de estaciones
+        this.showStationDetail(provincia);
+        
+        // Mover mapa a la provincia
+        const coords = PROVINCE_COORDS[provincia.toUpperCase()];
+        if (coords) {
+          this.map.flyTo([coords.lat, coords.lng], 9, { duration: 1 });
+        }
+        
+        // Actualizar marcadores de estaciones
+        this.updateStationMarkers();
+      },
+      
+      showStationDetail(provincia) {
+        const province = this.provinceAverages.find(p => p.provincia === provincia);
+        if (!province) return;
+        
+        const detailPanel = document.getElementById('stationDetail');
+        const stationList = document.getElementById('stationList');
+        
+        // Ordenar estaciones por precio de gasolina95
+        const sortedStations = [...province.stations].sort((a, b) => {
+          if (a.gasolina95 !== null && b.gasolina95 !== null) {
+            return a.gasolina95 - b.gasolina95;
+          }
+          return 0;
+        });
+        
+        // Top 3 de esta provincia
+        const topStations = sortedStations.slice(0, 3);
+        
+        stationList.innerHTML = sortedStations.map((station, index) => {
+          const isTop1 = station === topStations[0];
+          const isTop2 = station === topStations[1];
+          const isTop3 = station === topStations[2];
+          
+          let badge = '';
+          let itemClass = '';
+          
+          if (isTop1) {
+            badge = '<span class="station-badge badge-gold">🥇</span>';
+            itemClass = 'top-1';
+          } else if (isTop2) {
+            badge = '<span class="station-badge badge-silver">🥈</span>';
+            itemClass = 'top-2';
+          } else if (isTop3) {
+            badge = '<span class="station-badge badge-bronze">🥉</span>';
+            itemClass = 'top-3';
+          }
+          
+          return `
+            <div class="station-item ${itemClass}">
+              <div class="station-name">
+                ${badge}
+                ${station.nombre}
+              </div>
+              <div class="station-info">
+                <span class="station-address">${station.direccion} - ${station.localidad}</span>
+              </div>
+              <div class="station-prices" style="margin-top: 4px;">
+                <span class="price-gasolina">G95: ${station.gasolina95?.toFixed(3)} €</span>
+                <span class="price-diesel">D: ${station.dieselA?.toFixed(3)} €</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+        
+        detailPanel.classList.add('visible');
+      },
+      
+      closeStationDetail() {
+        document.getElementById('stationDetail').classList.remove('visible');
+        this.selectedProvince = null;
+        this.updateStationMarkers();
+      },
+      
+      // ============================================================
+      // ACTUALIZAR MARCADORES DE ESTACIONES
+      // ============================================================
+      updateStationMarkers() {
+        this.markersLayer.clearLayers();
+        
+        // Redibujar círculos de provincia
+        const minGas = Math.min(...this.provinceAverages.map(p => p.avgGasolina95).filter(v => v !== null));
+        const maxGas = Math.max(...this.provinceAverages.map(p => p.avgGasolina95).filter(v => v !== null));
+        
+        this.provinceAverages.forEach(province => {
+          const coords = PROVINCE_COORDS[province.provincia.toUpperCase()];
+          if (!coords) return;
+          
+          const color = this.getPriceColor(province.avgGasolina95, minGas, maxGas);
+          const radius = 15000 + (province.count * 500);
+          
+          const circle = L.circle(coords, {
+            radius: radius,
+            color: color,
+            fillColor: color,
+            fillOpacity: 0.4,
+            weight: 2,
+            opacity: 0.8
+          });
+          
+          circle.bindPopup(`
+            <div class="popup-title">${province.provincia}</div>
+            <div class="popup-row">
+              <span class="popup-label">Promedio Gasolina 95:</span>
+              <span class="popup-value" style="color: var(--accent-green)">${province.avgGasolina95?.toFixed(3)} €</span>
+            </div>
+            <div class="popup-row">
+              <span class="popup-label">Promedio Gasóleo A:</span>
+              <span class="popup-value" style="color: var(--accent-blue)">${province.avgDieselA?.toFixed(3)} €</span>
+            </div>
+            <div class="popup-divider"></div>
+            <div class="popup-row">
+              <span class="popup-label">Mín / Máx Gasolina:</span>
+              <span class="popup-value">${province.minGasolina95?.toFixed(3)} / ${province.maxGasolina95?.toFixed(3)}</span>
+            </div>
+            <div class="popup-row">
+              <span class="popup-label">Estaciones:</span>
+              <span class="popup-value">${province.count}</span>
+            </div>
+          `);
+          
+          circle.on('click', () => {
+            this.selectProvince(province.provincia);
+          });
+          
+          this.markersLayer.addLayer(circle);
+        });
+        
+        // Si hay una provincia seleccionada, mostrar estaciones individuales
+        if (this.selectedProvince) {
+          const province = this.provinceAverages.find(p => p.provincia === this.selectedProvince);
+          if (province) {
+            province.stations.forEach(station => {
+              if (station.lat === 0 && station.lng === 0) return;
+              
+              const color = station.gasolina95 !== null 
+                ? this.getPriceColor(station.gasolina95, minGas, maxGas)
+                : '#666';
+              
+              const marker = L.circleMarker([station.lat, station.lng], {
+                radius: 6,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.8,
+                weight: 1
+              });
+              
+              marker.bindPopup(`
+                <div class="popup-title">${station.nombre}</div>
+                <div class="popup-row">
+                  <span class="popup-label">Dirección:</span>
+                  <span class="popup-value" style="font-size: 11px">${station.direccion}</span>
+                </div>
+                <div class="popup-row">
+                  <span class="popup-label">Localidad:</span>
+                  <span class="popup-value">${station.localidad}</span>
+                </div>
+                <div class="popup-divider"></div>
+                <div class="popup-row">
+                  <span class="popup-label">Gasolina 95:</span>
+                  <span class="popup-value" style="color: var(--accent-green)">${station.gasolina95?.toFixed(3)} €</span>
+                </div>
+                <div class="popup-row">
+                  <span class="popup-label">Gasóleo A:</span>
+                  <span class="popup-value" style="color: var(--accent-blue)">${station.dieselA?.toFixed(3)} €</span>
+                </div>
+              `);
+              
+              this.markersLayer.addLayer(marker);
+            });
+          }
+        }
+      },
+      
+      // ============================================================
+      // UTILIDADES
+      // ============================================================
+      getPriceColor(price, min, max) {
+        if (price === null || min === null || max === null) return '#666';
+        if (min === max) return '#22c55e';
+        
+        const ratio = (price - min) / (max - min);
+        
+        // Gradiente: verde (barato) -> amarillo -> rojo (caro)
+        if (ratio < 0.33) {
+          return '#22c55e'; // Verde
+        } else if (ratio < 0.66) {
+          return '#eab308'; // Amarillo
+        } else {
+          return '#ef4444'; // Rojo
+        }
+      },
+      
+      updateCacheInfo(fromCache) {
+        const cacheInfo = document.getElementById('cacheInfo');
+        const cacheText = document.getElementById('cacheText');
+        
+        if (fromCache) {
+          cacheInfo.classList.remove('stale');
+          cacheText.textContent = 'Caché activa';
+        } else {
+          cacheInfo.classList.add('stale');
+          cacheText.textContent = 'Actualizado';
+          setTimeout(() => {
+            cacheInfo.classList.remove('stale');
+            cacheText.textContent = 'Caché activa';
+          }, 3000);
+        }
+      },
+      
+      showLoading(show) {
+        const overlay = document.getElementById('loadingOverlay');
+        if (show) {
+          overlay.classList.remove('hidden');
+        } else {
+          overlay.classList.add('hidden');
+        }
+      },
+      
+      showError(message) {
+        const banner = document.getElementById('errorBanner');
+        banner.textContent = message;
+        banner.classList.add('visible');
+        
+        setTimeout(() => {
+          banner.classList.remove('visible');
+        }, 8000);
+      },
+      
+      hideError() {
+        document.getElementById('errorBanner').classList.remove('visible');
+      },
+      
+      toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const toggle = sidebar.querySelector('.sidebar-toggle');
+        sidebar.classList.toggle('collapsed');
+        toggle.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+      },
+      
+      // ============================================================
+      // BÚSQUEDA
+      // ============================================================
+      setupSearch() {
+        const input = document.getElementById('searchInput');
+        let debounceTimer;
+        
+        input.addEventListener('input', (e) => {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            this.renderProvinceList();
+          }, 200);
+        });
+      },
+      
+      // ============================================================
+      // AUTO-REFRESH A MEDIANOCHE
+      // ============================================================
+      setupAutoRefresh() {
+        const checkInterval = setInterval(() => {
+          const now = new Date();
+          const midnight = new Date(now);
+          midnight.setHours(24, 0, 0, 0);
+          const msUntilMidnight = midnight - now;
+          
+          if (msUntilMidnight < 60000) { // Si faltan menos de 1 minuto
+            clearInterval(checkInterval);
+            console.log('Auto-refresh a medianoche programado');
+            setTimeout(() => {
+              this.refreshData();
+            }, msUntilMidnight);
+          }
+        }, 30000); // Chequear cada 30 segundos
+      },
+      
+      // ============================================================
+      // LOCALSTORAGE (caché del navegador)
+      // ============================================================
+      saveToLocalStorage() {
+        try {
+          const data = {
+            data: this.data,
+            timestamp: Date.now(),
+            cacheExpiry: this.cacheExpiry
+          };
+          localStorage.setItem(this.LOCAL_STORAGE_KEY, JSON.stringify(data));
+        } catch (e) {
+          console.warn('Error guardando en localStorage:', e);
+        }
+      },
+      
+      loadFromLocalStorage() {
+        try {
+          const stored = localStorage.getItem(this.LOCAL_STORAGE_KEY);
+          if (!stored) return false;
+          
+          const parsed = JSON.parse(stored);
+          const age = Date.now() - parsed.timestamp;
+          
+          // Si el caché tiene menos de 12h, usarlo
+          if (age < this.CACHE_DURATION_MS && parsed.data) {
+            console.log('Datos cargados desde caché del navegador');
+            this.data = parsed.data;
+            this.cacheExpiry = parsed.cacheExpiry;
+            this.processData();
+            this.renderMap();
+            this.renderProvinceList();
+            this.updateCacheInfo(true);
+            return true;
+          }
+        } catch (e) {
+          console.warn('Error cargando desde localStorage:', e);
+        }
+        return false;
+      }
+    };
+    
+    // Inicializar cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', () => {
+      app.init();
+    });
+  </script>
+</body>
+</html>
