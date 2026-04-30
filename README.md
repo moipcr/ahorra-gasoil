@@ -28,11 +28,11 @@ npm install
 npm start
 ```
 
-El servidor se ejecutará en `http://localhost:3000`
+El servidor se ejecutará en `http://localhost:8080`
 
 ### Acceder al portal
 
-Abre en tu navegador: **http://localhost:3000/index.html**
+Abre en tu navegador: **http://localhost:8080/**
 
 ## 🧪 Tests
 
@@ -52,6 +52,9 @@ npm run test:coverage # Con cobertura de código
 - **Búsqueda** de provincias
 - **Diseño responsive** (escritorio y móvil)
 - **Tema oscuro** profesional
+- **Gráficas de historial** (7 días / 30 días) con Chart.js
+- **Tabla de marcas** top 10 por menor precio
+- **Almacenamiento persistente** en SQLite (no se pierde con caché del navegador)
 
 ## 🏗️ Arquitectura
 
@@ -90,15 +93,27 @@ npm run test:coverage # Con cobertura de código
 
 ```
 top-ahorro-gasolinera/
-├── server.js          # Servidor proxy con caché
+├── server.js          # Servidor proxy con caché + SQLite
 ├── index.html         # Portal principal (HTML + CSS + JS)
 ├── package.json       # Dependencias y scripts
 ├── jest.config.js     # Configuración de tests
+├── data/
+│   └── precios.db     # Base de datos SQLite (historial + precios)
 ├── tests/
 │   ├── cache.test.js      # Tests del caché
 │   └── data-processing.test.js  # Tests de procesamiento
 └── README.md
 ```
+
+## 🗄️ Base de datos SQLite
+
+La aplicación utiliza **better-sqlite3** para almacenar datos históricos de forma persistente:
+
+- `snapshots`: Registros diarios con fecha y conteo de estaciones
+- `snapshot_precios`: Promedios por provincia por día
+- `estaciones`: Datos individuales de cada gasolinera
+
+La BD se crea automáticamente en `data/precios.db` al iniciar el servidor. Se mantiene un máximo de 30 días de historial.
 
 ## 🔧 Configuración
 
@@ -113,6 +128,16 @@ top-ahorro-gasolinera/
 - **URL:** `https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/EstacionesTerrestres/`
 - **Formato:** JSON
 - **Frecuencia:** Actualización diaria automática
+
+## 🔌 Endpoints adicionales
+
+| Endpoint | Descripción |
+|----------|-------------|
+| `GET /api/historico?dias=7&provincia=MADRID` | Datos históricos de 7 días para una provincia |
+| `GET /api/historico?dias=30` | Datos históricos nacionales de 30 días |
+| `GET /api/historico/provincia?provincia=MADRID` | Historial detallado de una provincia |
+| `GET /api/marcas?provincia=MADRID` | Top 10 marcas por menor precio |
+| `GET /api/db/info` | Información de la base de datos |
 
 ## 📝 Notas
 

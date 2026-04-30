@@ -10,7 +10,7 @@
 ```
 index.html (portal completo: HTML + CSS + JS vanilla)
     │
-    fetch → localhost:3000/api/precios
+    fetch → localhost:8080/api/precios
     │
 server.js (Express proxy) ──▶ API MINETUR (datos.gob.es)
     │       Caché 12h en memoria
@@ -27,20 +27,23 @@ server.js (Express proxy) ──▶ API MINETUR (datos.gob.es)
 ## 📁 Estructura
 
 ```
-server.js          → Servidor Express + caché + proxy
-index.html         → Portal completo (Leaflet CDN, CSS embebido, JS embebido)
-package.json       → dependencias: express, jest
+server.js          → Servidor Express + caché + proxy + SQLite
+index.html         → Portal completo (Leaflet CDN, Chart.js, CSS embebido, JS embebido)
+package.json       → dependencias: express, jest, better-sqlite3
+data/
+  precios.db       → Base de datos SQLite (historial + precios)
 tests/
   cache.test.js    → Tests del módulo de caché
   data-processing.test.js → Tests de lógica de datos (procesamiento, colores)
 jest.config.js     → Configuración Jest
 README.md          → Documentación de uso
+AGENTS.md          → Guía para agentes
 ```
 
 ## 🔑 Comandos clave
 
 ```bash
-npm start          # Iniciar servidor (localhost:3000)
+npm start          # Iniciar servidor (localhost:8080)
 npm test           # Ejecutar suite de pruebas
 npm run test:coverage  # Tests con cobertura
 npm run test:watch   # Watch mode
@@ -49,10 +52,12 @@ npm run test:watch   # Watch mode
 ## 🗺️ Mapa y UI
 
 - **Leaflet** (CDN) con capa CartoDB Dark Matter
+- **Chart.js** (CDN) para gráficas de historial
 - Marcadores de provincia: círculos coloreados (verde=barato, rojo=caro)
 - Marcadores de estación: circleMarkers al seleccionar provincia
 - Sidebar con tabla de provincias ordenada por precio promedio
 - Top 3 destacado con 🥇 dorado, 🥈 plateado, 🥉 bronce
+- Panel inferior con pestañas: Precios | Historial | Marcas
 - **No hay build step** — todo es HTML/CSS/JS vanilla
 
 ## ⚡ Quirks y gotchas
@@ -64,6 +69,7 @@ npm run test:watch   # Watch mode
 5. **Ceuta y Melilla** → autónomas, no provincias; tienen coordenadas propias
 6. **Caché dual** → servidor (12h) + navegador (12h). Si ambas expiran, se llama a MINETUR
 7. **Auto-refresh** → se programa a medianoche local del usuario
+8. **Puerto 3000 bloqueado en Windows** → el default es 8080. Si quieres otro puerto: `PORT=4000 npm start`
 
 ## 🧪 Tests
 
