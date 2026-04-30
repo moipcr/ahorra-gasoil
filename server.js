@@ -63,6 +63,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_estaciones_fecha ON estaciones(fecha);
   CREATE INDEX IF NOT EXISTS idx_estaciones_provincia ON estaciones(provincia);
   CREATE INDEX IF NOT EXISTS idx_estaciones_fecha_provincia ON estaciones(fecha, provincia);
+  CREATE INDEX IF NOT EXISTS idx_estaciones_snapshot ON estaciones(snapshot_id);
+  CREATE INDEX IF NOT EXISTS idx_snapshot_precios_snapshot ON snapshot_precios(snapshot_id);
+  CREATE INDEX IF NOT EXISTS idx_snapshots_fecha ON snapshots(fecha);
 `);
 
 console.log('[DB] SQLite inicializado:', DB_PATH);
@@ -73,8 +76,25 @@ console.log('[DB] SQLite inicializado:', DB_PATH);
 let cache = {
   data: null,
   timestamp: null,
-  error: null
+  error: null,
+  lastDataHash: null  // Hash para detectar cambios en los datos
 };
+
+/**
+ * Genera un hash simple del data para detectar cambios
+ */
+function generateDataHash(data) {
+  if (!data || !data.ListaEESSPrecio) return null;
+  // Usar Fecha + longitud + suma de precios como hash
+  const estaciones = data.ListaEESSPrecio;
+  let sum = 0;
+  for (const est of estaciones) {
+    const gas = est['Precio Gasolina 95 E5'] || '0';
+    const diesel = est['Precio Gasoleo A'] || '0';
+    sum += gas.replace(',', '.') * 1000 + diesel.replace(',', '.') * 1000;
+  }
+  return `${data.Fecha}|${estaciones.length}|${Math.round(sum)}`;
+}
 
 // ============================================================
 // FUNCIONES DE BASE DE DATOS
@@ -83,6 +103,8 @@ let cache = {
 /**
  * Guarda un snapshot de precios en la BD
  */
+let lastCleanup = 0;
+
 function guardarSnapshot(data) {
   // Validar estructura del response
   if (!data) {
@@ -123,12 +145,21 @@ function guardarSnapshot(data) {
       const [day, month, year] = fechaStr.split('/');
       fechaCompleta = `${year}-${month}-${day}T${horaStr}Z`;
     }
-    
-    // Eliminar snapshot previo si existe (evita INSERT OR REPLACE con FK issues)
-    const oldSnapshot = db.prepare('SELECT id FROM snapshots WHERE fecha = ?').get(fecha);
-    if (oldSnapshot) {
-      db.prepare('DELETE FROM snapshot_precios WHERE snapshot_id = ?').run(oldSnapshot.id);
-      db.prepare('DELETE FROM estaciones WHERE snapshot_id = ?').run(oldSnapshot.id);
+
+    // Verificar si ya existe un snapshot para esta fecha
+    const existingSnapshot = db.prepare('SELECT id FROM snapshots WHERE fecha = ?').get(fecha);
+    if (existingSnapshot) {
+      // Verificar si los datos son idénticos (comparar hash)
+      const newHash = generateDataHash(data);
+      if (newHash === cache.lastDataHash) {
+        console.log('[BD] Snapshot sin cambios para', fecha, '- omitiendo guardado');
+        return;
+      }
+      
+      // Datos han cambiado: eliminar snapshot anterior
+      console.log('[BD] Datos actualizados para', fecha, '- actualizando snapshot existente');
+      db.prepare('DELETE FROM snapshot_precios WHERE snapshot_id = ?').run(existingSnapshot.id);
+      db.prepare('DELETE FROM estaciones WHERE snapshot_id = ?').run(existingSnapshot.id);
       db.prepare('DELETE FROM snapshots WHERE fecha = ?').run(fecha);
     }
 
@@ -136,9 +167,9 @@ function guardarSnapshot(data) {
     const result = db.prepare('INSERT INTO snapshots (fecha, fecha_completa, estaciones_count) VALUES (?, ?, ?)').run(fecha, fechaCompleta, data.ListaEESSPrecio?.length || 0);
     const snapshotId = result.lastInsertRowid;
 
-    // Insertar precios por provincia
-    const estaciones = data.ListaEESSPrecio || [];
+    // Agrupar precios por provincia
     const provinceMap = new Map();
+    const estaciones = data.ListaEESSPrecio;
 
     estaciones.forEach(est => {
       const prov = est.Provincia?.trim();
@@ -155,32 +186,41 @@ function guardarSnapshot(data) {
       if (!isNaN(diesel)) provinceMap.get(prov).diesel.push(diesel);
     });
 
-    // Guardar promedios por provincia
+    // Guardar promedios por provincia (batch con transaction)
     const insertPrecio = db.prepare(`
       INSERT INTO snapshot_precios (snapshot_id, provincia, avg_gasolina95, avg_diesel, count)
       VALUES (?, ?, ?, ?, ?)
     `);
 
+    const precioRows = [];
     provinceMap.forEach((val, prov) => {
       const avgGas = val.gas95.length > 0 ? val.gas95.reduce((a, b) => a + b, 0) / val.gas95.length : null;
       const avgDiesel = val.diesel.length > 0 ? val.diesel.reduce((a, b) => a + b, 0) / val.diesel.length : null;
-      insertPrecio.run(snapshotId, prov, avgGas, avgDiesel, val.gas95.length + val.diesel.length);
+      precioRows.push([snapshotId, prov, avgGas, avgDiesel, val.gas95.length + val.diesel.length]);
     });
 
-    // Guardar estaciones individuales
+    // Ejecutar en batch dentro de una transacción
+    const insertPrecioBatch = db.transaction((rows) => {
+      for (const row of rows) {
+        insertPrecio.run(row);
+      }
+    });
+    insertPrecioBatch(precioRows);
+
+    // Guardar estaciones individuales (batch con transaction)
     const insertEstacion = db.prepare(`
       INSERT INTO estaciones (snapshot_id, fecha, provincia, localidad, marca, direccion, lat, lng, precio_gasolina95, precio_diesel)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    estaciones.forEach(est => {
+    const estacionRows = estaciones.map(est => {
       const prov = est.Provincia?.trim();
-      if (!prov) return;
+      if (!prov) return null;
 
       const gas95 = parseFloat((est['Precio Gasolina 95 E5'] || '').replace(',', '.'));
       const diesel = parseFloat((est['Precio Gasoleo A'] || '').replace(',', '.'));
 
-      insertEstacion.run(
+      return [
         snapshotId,
         fecha,
         prov,
@@ -191,14 +231,33 @@ function guardarSnapshot(data) {
         parseFloat(est['Longitud (WGS84)']) || 0,
         isNaN(gas95) ? null : gas95,
         isNaN(diesel) ? null : diesel
-      );
+      ];
+    }).filter(Boolean);
+
+    // Ejecutar en batch dentro de una transacción
+    const insertEstacionBatch = db.transaction((rows) => {
+      for (const row of rows) {
+        insertEstacion.run(row);
+      }
     });
+    insertEstacionBatch(estacionRows);
 
     console.log(`[DB] Snapshot guardado: ${fecha} - ${estaciones.length} estaciones`);
 
-    // Limpiar snapshots antiguos (mantener últimos 30 días)
-    const cleanup = db.prepare("DELETE FROM snapshots WHERE fecha < date('now', '-30 days')");
-    cleanup.run();
+    // Limpiar snapshots antiguos (mantener últimos 30 días) - throttle cada 5 min
+    const now = Date.now();
+    if (now - lastCleanup > 5 * 60 * 1000) {
+      lastCleanup = now;
+      const cleanup = db.prepare("DELETE FROM snapshots WHERE fecha < date('now', '-30 days')");
+      const result = cleanup.run();
+      if (result.changes > 0) {
+        console.log(`[DB] Limpieza: eliminados ${result.changes} snapshots antiguos`);
+      }
+    }
+
+    // Guardar hash para detección de cambios
+    cache.lastDataHash = generateDataHash(data);
+    console.log(`[DB] Snapshot guardado: ${fecha} - ${estaciones.length} estaciones`);
 
   } catch (err) {
     console.error('[BD] Error guardando snapshot:', err.message);
@@ -206,7 +265,7 @@ function guardarSnapshot(data) {
 }
 
 /**
- * Obtiene datos históricos
+ * Obtiene datos históricos (optimizado: una sola query con JOIN)
  */
 function getHistorico(provincia = null, dias = 7) {
   const recent = db.prepare(`
@@ -219,37 +278,30 @@ function getHistorico(provincia = null, dias = 7) {
   let promedios = [];
 
   if (provincia) {
-    promedios = recent.map(day => {
-      const provData = db.prepare(`
-        SELECT avg_gasolina95, avg_diesel
-        FROM snapshot_precios
-        WHERE snapshot_id = (SELECT id FROM snapshots WHERE fecha = ?)
-        AND provincia = ?
-      `).get(day.fecha, provincia);
-
-      return {
-        fecha: day.fecha,
-        gasolina95: provData?.avg_gasolina95 || null,
-        dieselA: provData?.avg_diesel || null
-      };
-    });
+    // Una sola query con JOIN para todos los días
+    promedios = db.prepare(`
+      SELECT s.fecha, sp.avg_gasolina95, sp.avg_diesel
+      FROM snapshot_precios sp
+      JOIN snapshots s ON sp.snapshot_id = s.id
+      WHERE sp.provincia = ?
+        AND s.fecha >= date('now', '-'+?||' days')
+      ORDER BY s.fecha DESC
+    `).all(provincia, dias);
   } else {
-    promedios = recent.map(day => {
-      const avg = db.prepare(`
-        SELECT AVG(avg_gasolina95) as avg_gas, AVG(avg_diesel) as avg_diesel
-        FROM snapshot_precios
-        WHERE snapshot_id = (SELECT id FROM snapshots WHERE fecha = ?)
-      `).get(day.fecha);
-
-      return {
-        fecha: day.fecha,
-        gasolina95: avg?.avg_gas || null,
-        dieselA: avg?.avg_diesel || null
-      };
-    });
+    // Una sola query con JOIN y GROUP BY para promedio nacional
+    promedios = db.prepare(`
+      SELECT s.fecha,
+             AVG(sp.avg_gasolina95) as avg_gas,
+             AVG(sp.avg_diesel) as avg_diesel
+      FROM snapshot_precios sp
+      JOIN snapshots s ON sp.snapshot_id = s.id
+      WHERE s.fecha >= date('now', '-'+?||' days')
+      GROUP BY s.fecha
+      ORDER BY s.fecha DESC
+    `).all(dias);
   }
 
-  const totalDias = db.prepare('SELECT COUNT(*) as count FROM snapshots').get().count;
+  const totalDias = promedios.length;
 
   return {
     historico: recent,
@@ -279,22 +331,19 @@ function getTopMarcasPorProvincia(provincia = null) {
       LIMIT 10
     `).all(provincia);
   } else {
-    // Top 10 marcas nacional (último día)
-    const ultimaFecha = db.prepare("SELECT fecha FROM snapshots ORDER BY fecha DESC LIMIT 1").get();
-    if (!ultimaFecha) return [];
-
+    // Top 10 marcas nacional (último día) - single query with subquery
     marcas = db.prepare(`
       SELECT marca,
              AVG(precio_gasolina95) as avg_gasolina95,
              AVG(precio_diesel) as avg_diesel,
              COUNT(*) as count
       FROM estaciones
-      WHERE snapshot_id = (SELECT id FROM snapshots WHERE fecha = ?)
+      WHERE snapshot_id = (SELECT id FROM snapshots ORDER BY fecha DESC LIMIT 1)
         AND precio_gasolina95 IS NOT NULL
       GROUP BY marca
       ORDER BY avg_gasolina95 ASC
       LIMIT 10
-    `).all(ultimaFecha.fecha);
+    `).all();
   }
 
   return marcas.map(m => ({
@@ -363,11 +412,13 @@ async function refreshCache() {
     cache.error = null;
     console.log(`[Cache] Datos actualizados: ${data.ListaEESSPrecio?.length || 0} estaciones`);
 
-    // Guardar en BD
+    // Guardar en BD solo si los datos han cambiado
     guardarSnapshot(data);
+    return { data, timestamp: cache.timestamp, error: null };
   } catch (err) {
     console.error('[Cache] Error actualizando:', err.message);
     cache.error = err.message;
+    return { data: null, timestamp: cache.timestamp, error: err.message };
   }
 }
 
@@ -524,18 +575,27 @@ app.get('/api/db/info', (req, res) => {
 });
 
 // ============================================================
-// INICIAR SERVIDOR
+// EXPORTS
 // ============================================================
-app.listen(PORT, () => {
-  console.log(`\n🚀 Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`📊 Portal: http://localhost:${PORT}/`);
-  console.log(`🔄 Actualizando datos de MINETUR...\n`);
-  refreshCache();
-
-  // Actualizar automáticamente cada 6 horas
-  setInterval(async () => {
-    await refreshCache();
-  }, 6 * 60 * 60 * 1000);
-});
-
 module.exports = { app, getCachedData, refreshCache, fetchMineturData, CACHE_DURATION_MS, db, guardarSnapshot, getHistorico, getTopMarcasPorProvincia, getHistoricoPorProvincia };
+
+// ============================================================
+// INICIAR SERVIDOR (solo si se ejecuta directamente)
+// ============================================================
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`\n🚀 Servidor corriendo en http://localhost:${PORT}`);
+    console.log(`📊 Portal: http://localhost:${PORT}/`);
+    console.log(`🔄 Actualizando datos de MINETUR...\n`);
+    
+    // Actualización de datos asíncrona (no bloquea el servidor)
+    refreshCache().catch(err => {
+      console.error('[Cache] Error en refresh inicial:', err.message);
+    });
+
+    // Actualizar automáticamente cada 6 horas
+    setInterval(async () => {
+      await refreshCache();
+    }, 6 * 60 * 60 * 1000);
+  });
+}

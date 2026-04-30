@@ -180,19 +180,59 @@
     }
 
     /* Sidebar */
-    .sidebar {
-      width: 420px;
-      background: var(--bg-secondary);
-      border-right: 1px solid var(--border-color);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      transition: transform 0.3s;
-    }
+.sidebar {
+  width: 420px;
+  min-width: 300px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: width 0.3s ease, min-width 0.3s ease, opacity 0.3s ease;
+  flex-shrink: 0;
+}
+
+.sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 
     .sidebar.collapsed {
-      transform: translateX(-420px);
-      margin-right: -420px;
+      width: 0;
+      min-width: 0;
+      opacity: 0;
+      border-right: none;
+    }
+
+    /* Floating sidebar toggle - visible when sidebar is collapsed */
+    .sidebar-float-toggle {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1001;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      padding: 8px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 16px;
+      box-shadow: var(--shadow);
+      transition: all 0.3s;
+      display: none;
+    }
+
+    .sidebar-float-toggle:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .sidebar-float-toggle.visible {
+      display: flex;
+      align-items: center;
+      gap: 4px;
     }
 
     .sidebar-header {
@@ -569,6 +609,11 @@
         margin-right: 0;
       }
 
+      /* Ocultar botón flotante de sidebar en móvil */
+      .sidebar-float-toggle {
+        display: none !important;
+      }
+
       .header {
         padding: 8px 12px;
       }
@@ -877,6 +922,39 @@
       color: var(--text-muted);
     }
 
+    /* Map style toggle */
+    .map-style-toggle {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      padding: 8px 14px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: var(--shadow);
+      user-select: none;
+    }
+
+    .map-style-toggle:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .map-style-toggle .icon {
+      font-size: 16px;
+      line-height: 1;
+    }
+
     /* Toggle panel */
     .toggle-panel-btn {
       position: absolute;
@@ -931,19 +1009,14 @@
   <!-- Main content -->
   <div class="main">
     <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
+    <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <span class="sidebar-title">📊 Precios por provincia</span>
-        <button class="sidebar-toggle" onclick="app.toggleSidebar()">◀</button>
+        <span class="sidebar-title">Precios por Provincia</span>
+        <button class="sidebar-toggle" id="sidebarToggle" title="Colapsar sidebar">◀</button>
       </div>
-      
-      <div class="province-list" id="provinceList">
-        <div class="empty-state">
-          <div class="empty-state-icon">⏳</div>
-          <div>Cargando datos...</div>
-        </div>
-      </div>
-      
+      <div class="province-list" id="provinceList"></div>
+    </div>
+
       <div class="station-detail" id="stationDetail">
         <div class="station-detail-header">
           <span>📍 Estaciones en esta provincia</span>
@@ -956,6 +1029,17 @@
     <!-- Map -->
     <div class="map-container">
       <div id="map"></div>
+      
+      <!-- Botón flotante para reabrir sidebar colapsado -->
+      <button class="sidebar-float-toggle" id="sidebarFloatToggle" title="Mostrar panel de provincias">
+        ☰ <span class="label">Panel</span>
+      </button>
+      
+      <!-- Botón toggle estilo de mapa -->
+      <button class="map-style-toggle" id="mapStyleToggle" title="Cambiar estilo del mapa">
+        <span class="icon">🌙</span>
+        <span class="label">Oscuro</span>
+      </button>
       
       <div class="loading-overlay" id="loadingOverlay">
         <div class="spinner"></div>
@@ -1139,6 +1223,8 @@
       init() {
         this.initMap();
         this.initMapFull();
+        this.initMapStyleToggle();
+        this.initSidebarFloatToggle();
         this.loadFromLocalStorage();
         this.setupSearch();
         this.setupAutoRefresh();
@@ -1157,19 +1243,19 @@
           attributionControl: true
         });
 
-        // Capa oscura de mapa (CartoDB Dark Matter)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        this.darkTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+          subdomains: 'abcd',
+          maxZoom: 19
+        });
+
+        this.lightTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
           subdomains: 'abcd',
           maxZoom: 19
         }).addTo(this.map);
 
         this.markersLayer = L.layerGroup().addTo(this.map);
-        
-        // Resetear filtro al hacer click en el mapa
-        this.map.on('click', () => {
-          this.resetSearchFilter();
-        });
       },
       
       // ============================================================
@@ -1798,8 +1884,29 @@
       toggleSidebar() {
         const sidebar = document.getElementById('sidebar');
         const toggle = sidebar.querySelector('.sidebar-toggle');
+        const floatToggle = document.getElementById('sidebarFloatToggle');
+        const isCollapsing = !sidebar.classList.contains('collapsed');
+        
         sidebar.classList.toggle('collapsed');
         toggle.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+        
+        // Mostrar/ocultar botón flotante
+        if (floatToggle) {
+          if (isCollapsing) {
+            // Se está colapsando → mostrar botón flotante
+            setTimeout(() => floatToggle.classList.add('visible'), 300);
+          } else {
+            // Se está expandiendo → ocultar botón flotante
+            floatToggle.classList.remove('visible');
+          }
+        }
+        
+        // Invalidar tamaño del mapa después de la transición CSS
+        if (this.map) {
+          setTimeout(() => {
+            this.map.invalidateSize();
+          }, 300);
+        }
       },
       
       toggleBottomPanel() {
@@ -1919,11 +2026,72 @@
           attributionControl: true
         });
 
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        this.mapFullDarkTile = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+          subdomains: 'abcd',
+          maxZoom: 19
+        });
+
+        this.mapFullLightTile = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
           subdomains: 'abcd',
           maxZoom: 19
         }).addTo(this.mapFull);
+      },
+      
+      // ============================================================
+      // TOGGLE ESTILO DE MAPA (oscuro/claro)
+      // ============================================================
+      mapStyleIsDark: false,
+      
+      toggleMapStyle() {
+        this.mapStyleIsDark = !this.mapStyleIsDark;
+        const btn = document.getElementById('mapStyleToggle');
+        const icon = btn.querySelector('.icon');
+        const label = btn.querySelector('.label');
+        
+        if (this.mapStyleIsDark) {
+          if (this.lightTileLayer) this.map.removeLayer(this.lightTileLayer);
+          if (this.darkTileLayer) this.darkTileLayer.addTo(this.map);
+          if (this.mapFullLightTile) this.mapFull.removeLayer(this.mapFullLightTile);
+          if (this.mapFullDarkTile) this.mapFullDarkTile.addTo(this.mapFull);
+          icon.textContent = '🌙';
+          label.textContent = 'Oscuro';
+          btn.title = 'Cambiar a mapa claro';
+        } else {
+          if (this.darkTileLayer) this.map.removeLayer(this.darkTileLayer);
+          if (this.lightTileLayer) this.lightTileLayer.addTo(this.map);
+          if (this.mapFullDarkTile) this.mapFull.removeLayer(this.mapFullDarkTile);
+          if (this.mapFullLightTile) this.mapFullLightTile.addTo(this.mapFull);
+          icon.textContent = '☀️';
+          label.textContent = 'Claro';
+          btn.title = 'Cambiar a mapa oscuro';
+        }
+        
+        setTimeout(() => {
+          this.map.invalidateSize();
+          if (this.mapFull) this.mapFull.invalidateSize();
+        }, 100);
+      },
+      
+      initMapStyleToggle() {
+        const btn = document.getElementById('mapStyleToggle');
+        if (btn) {
+          btn.addEventListener('click', () => this.toggleMapStyle());
+        }
+      },
+
+      initSidebarFloatToggle() {
+        const btn = document.getElementById('sidebarFloatToggle');
+        if (btn) {
+          btn.addEventListener('click', () => this.toggleSidebar());
+        }
+        
+        // Toggle del sidebar (dentro del sidebar)
+        const sidebarToggle = document.getElementById('sidebarToggle');
+        if (sidebarToggle) {
+          sidebarToggle.addEventListener('click', () => this.toggleSidebar());
+        }
       },
       
       // ============================================================

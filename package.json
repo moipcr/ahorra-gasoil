@@ -2,6 +2,7 @@
   "name": "top-ahorro-gasolinera",
   "version": "1.0.0",
   "description": "Portal de precios de combustible en España por provincia",
+  "author": "Moisés Martinez (2026)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
