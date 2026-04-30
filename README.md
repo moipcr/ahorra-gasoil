@@ -2,6 +2,8 @@
 
 Portal de precios de combustible en España por provincia. Muestra gasolina 95 E5 y gasóleo A con mapa interactivo y tabla de precios.
 
+> **Versión desplegada para probar:** [https://ahorra-gasoil.onrender.com/](https://ahorra-gasoil.onrender.com/)
+
 ## 🚀 Instalación
 
 ### 1. Instalar Node.js (requerido)
