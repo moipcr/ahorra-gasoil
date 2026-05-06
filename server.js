@@ -68,6 +68,51 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_snapshots_fecha ON snapshots(fecha);
 `);
 
+// Crear tabla de archivos para preservar historial de snapshots
+db.exec(`
+  CREATE TABLE IF NOT EXISTS snapshot_archivos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fecha TEXT NOT NULL,
+    fecha_completa TEXT,
+    estaciones_count INTEGER,
+    creado_en TEXT DEFAULT (datetime('now')),
+    UNIQUE(fecha)
+  );
+
+  CREATE TABLE IF NOT EXISTS snapshot_archivo_precios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archivo_id INTEGER NOT NULL,
+    provincia TEXT NOT NULL,
+    avg_gasolina95 REAL,
+    avg_diesel REAL,
+    count INTEGER,
+    FOREIGN KEY (archivo_id) REFERENCES snapshot_archivos(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS snapshot_archivo_estaciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archivo_id INTEGER NOT NULL,
+    fecha TEXT NOT NULL,
+    provincia TEXT NOT NULL,
+    localidad TEXT,
+    marca TEXT,
+    direccion TEXT,
+    lat REAL,
+    lng REAL,
+    precio_gasolina95 REAL,
+    precio_diesel REAL,
+    FOREIGN KEY (archivo_id) REFERENCES snapshot_archivos(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_archivo_precios_provincia ON snapshot_archivo_precios(archivo_id, provincia);
+  CREATE INDEX IF NOT EXISTS idx_archivo_estaciones_fecha ON snapshot_archivo_estaciones(fecha);
+  CREATE INDEX IF NOT EXISTS idx_archivo_estaciones_provincia ON snapshot_archivo_estaciones(provincia);
+  CREATE INDEX IF NOT EXISTS idx_archivo_estaciones_fecha_provincia ON snapshot_archivo_estaciones(fecha, provincia);
+  CREATE INDEX IF NOT EXISTS idx_archivo_estaciones_archivo ON snapshot_archivo_estaciones(archivo_id);
+  CREATE INDEX IF NOT EXISTS idx_archivo_precios_archivo ON snapshot_archivo_precios(archivo_id);
+  CREATE INDEX IF NOT EXISTS idx_archivo_archivos_fecha ON snapshot_archivos(fecha);
+`);
+
 console.log('[DB] SQLite inicializado:', DB_PATH);
 
 // ============================================================
@@ -146,21 +191,50 @@ function guardarSnapshot(data) {
       fechaCompleta = `${year}-${month}-${day}T${horaStr}Z`;
     }
 
-    // Verificar si ya existe un snapshot para esta fecha
-    const existingSnapshot = db.prepare('SELECT id FROM snapshots WHERE fecha = ?').get(fecha);
+    // Verificar si ya existe un snapshot para esta fecha (en snapshots activos O archivados)
+    const existingSnapshot = db.prepare(`
+      SELECT id FROM snapshots WHERE fecha = ?
+      UNION
+      SELECT id FROM snapshot_archivos WHERE fecha = ?
+    `).get(fecha, fecha);
     if (existingSnapshot) {
-      // Verificar si los datos son idénticos (comparar hash)
-      const newHash = generateDataHash(data);
-      if (newHash === cache.lastDataHash) {
-        console.log('[BD] Snapshot sin cambios para', fecha, '- omitiendo guardado');
-        return;
+      // La API MINETUR publica UNA vez por día. Si ya existe snapshot para esta fecha,
+      // omitir guardado para evitar duplicados (la deduplicación por cache.lastDataHash
+      // es inválida porque se pierde al reiniciar el servidor).
+      console.log('[BD] Ya existe snapshot para', fecha, '(activo o archivado) - omitiendo guardado');
+      return;
+    }
+
+    // ARCHIVAR snapshot anterior del mismo día ANTES de sobrescribir
+    // Esto preserva el historial aunque se apague el servidor
+    const existingForArchive = db.prepare('SELECT id FROM snapshots WHERE fecha = date(\'now\', \'localtime\')').get();
+    if (existingForArchive) {
+      const archiveId = db.prepare('INSERT INTO snapshot_archivos (fecha, fecha_completa, estaciones_count) VALUES (?, ?, ?)').run(
+        existingForArchive.fecha,
+        existingForArchive.fecha_completa,
+        existingForArchive.estaciones_count
+      ).lastInsertRowid;
+
+      // Copiar promedios por provincia
+      const promoRows = db.prepare('SELECT provincia, avg_gasolina95, avg_diesel, count FROM snapshot_precios WHERE snapshot_id = ?').all(existingForArchive.id);
+      const insertArchivoPrecio = db.prepare('INSERT INTO snapshot_archivo_precios (archivo_id, provincia, avg_gasolina95, avg_diesel, count) VALUES (?, ?, ?, ?, ?)');
+      for (const r of promoRows) {
+        insertArchivoPrecio.run(archiveId, r.provincia, r.avg_gasolina95, r.avg_diesel, r.count);
       }
-      
-      // Datos han cambiado: eliminar snapshot anterior
-      console.log('[BD] Datos actualizados para', fecha, '- actualizando snapshot existente');
-      db.prepare('DELETE FROM snapshot_precios WHERE snapshot_id = ?').run(existingSnapshot.id);
-      db.prepare('DELETE FROM estaciones WHERE snapshot_id = ?').run(existingSnapshot.id);
-      db.prepare('DELETE FROM snapshots WHERE fecha = ?').run(fecha);
+
+      // Copiar estaciones individuales
+      const estRows = db.prepare('SELECT fecha, provincia, localidad, marca, direccion, lat, lng, precio_gasolina95, precio_diesel FROM estaciones WHERE snapshot_id = ?').all(existingForArchive.id);
+      const insertArchivoEstacion = db.prepare('INSERT INTO snapshot_archivo_estaciones (archivo_id, fecha, provincia, localidad, marca, direccion, lat, lng, precio_gasolina95, precio_diesel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const r of estRows) {
+        insertArchivoEstacion.run(archiveId, r.fecha, r.provincia, r.localidad, r.marca, r.direccion, r.lat, r.lng, r.precio_gasolina95, r.precio_diesel);
+      }
+
+      // Eliminar snapshot actual para liberar espacio
+      db.prepare('DELETE FROM snapshot_precios WHERE snapshot_id = ?').run(existingForArchive.id);
+      db.prepare('DELETE FROM estaciones WHERE snapshot_id = ?').run(existingForArchive.id);
+      db.prepare('DELETE FROM snapshots WHERE id = ?').run(existingForArchive.id);
+
+      console.log(`[BD] Snapshot de ${existingForArchive.fecha} archivado y eliminado (liberando espacio)`);
     }
 
     // Insertar nuevo snapshot
@@ -257,7 +331,6 @@ function guardarSnapshot(data) {
 
     // Guardar hash para detección de cambios
     cache.lastDataHash = generateDataHash(data);
-    console.log(`[DB] Snapshot guardado: ${fecha} - ${estaciones.length} estaciones`);
 
   } catch (err) {
     console.error('[BD] Error guardando snapshot:', err.message);
@@ -265,39 +338,64 @@ function guardarSnapshot(data) {
 }
 
 /**
- * Obtiene datos históricos (optimizado: una sola query con JOIN)
+ * Obtiene datos históricos (optimizado: consulta snapshots activos + archivados)
  */
 function getHistorico(provincia = null, dias = 7) {
+  // Consultar snapshots activos + archivados combinados
   const recent = db.prepare(`
-    SELECT s.fecha, s.fecha_completa, s.estaciones_count
-    FROM snapshots s
-    WHERE s.fecha >= date('now', '-'+?||' days')
-    ORDER BY s.fecha DESC
-  `).all(dias);
+    SELECT fecha, fecha_completa, estaciones_count FROM (
+      SELECT fecha, fecha_completa, estaciones_count FROM snapshots
+      WHERE fecha >= date('now', '-'+?||' days')
+      UNION ALL
+      SELECT fecha, fecha_completa, estaciones_count FROM snapshot_archivos
+      WHERE fecha >= date('now', '-'+?||' days')
+    )
+    GROUP BY fecha
+    ORDER BY fecha DESC
+  `).all(dias, dias);
 
   let promedios = [];
 
   if (provincia) {
-    // Una sola query con JOIN para todos los días
+    // Consultar promedios de snapshots activos + archivados
     promedios = db.prepare(`
-      SELECT s.fecha, sp.avg_gasolina95, sp.avg_diesel
-      FROM snapshot_precios sp
-      JOIN snapshots s ON sp.snapshot_id = s.id
-      WHERE sp.provincia = ?
-        AND s.fecha >= date('now', '-'+?||' days')
-      ORDER BY s.fecha DESC
-    `).all(provincia, dias);
+      SELECT fecha, 
+        SUM(gasolina95) / COUNT(gasolina95) as gasolina95,
+        SUM(dieselA) / COUNT(dieselA) as dieselA
+      FROM (
+        SELECT sa.fecha, sap.avg_gasolina95 as gasolina95, sap.avg_diesel as dieselA
+        FROM snapshot_archivo_precios sap
+        JOIN snapshot_archivos sa ON sap.archivo_id = sa.id
+        WHERE sap.provincia = ?
+          AND sa.fecha >= date('now', '-'+?||' days')
+        UNION ALL
+        SELECT s.fecha, sp.avg_gasolina95 as gasolina95, sp.avg_diesel as dieselA
+        FROM snapshot_precios sp
+        JOIN snapshots s ON sp.snapshot_id = s.id
+        WHERE sp.provincia = ?
+          AND s.fecha >= date('now', '-'+?||' days')
+      )
+      GROUP BY fecha
+      ORDER BY fecha DESC
+    `).all(provincia, dias, provincia, dias);
   } else {
-    // Una sola query con JOIN y GROUP BY para promedio nacional
+    // Promedio nacional de snapshots activos + archivados
     promedios = db.prepare(`
-      SELECT s.fecha,
-             AVG(sp.avg_gasolina95) as avg_gas,
-             AVG(sp.avg_diesel) as avg_diesel
-      FROM snapshot_precios sp
-      JOIN snapshots s ON sp.snapshot_id = s.id
-      WHERE s.fecha >= date('now', '-'+?||' days')
-      GROUP BY s.fecha
-      ORDER BY s.fecha DESC
+      SELECT fecha, AVG(gasolina95) as gasolina95, AVG(dieselA) as dieselA FROM (
+        SELECT sa.fecha, sap.avg_gasolina95 as gasolina95, sap.avg_diesel as dieselA
+        FROM snapshot_archivo_precios sap
+        JOIN snapshot_archivos sa ON sap.archivo_id = sa.id
+        WHERE sa.fecha >= date('now', '-'+?||' days')
+        GROUP BY sa.fecha
+        UNION ALL
+        SELECT s.fecha, sp.avg_gasolina95 as gasolina95, sp.avg_diesel as dieselA
+        FROM snapshot_precios sp
+        JOIN snapshots s ON sp.snapshot_id = s.id
+        WHERE s.fecha >= date('now', '-'+?||' days')
+        GROUP BY s.fecha
+      )
+      GROUP BY fecha
+      ORDER BY fecha DESC
     `).all(dias);
   }
 
@@ -331,15 +429,23 @@ function getTopMarcasPorProvincia(provincia = null) {
       LIMIT 10
     `).all(provincia);
   } else {
-    // Top 10 marcas nacional (último día) - single query with subquery
+    // Top 10 marcas nacional (último día) - combined active + archived
     marcas = db.prepare(`
       SELECT marca,
              AVG(precio_gasolina95) as avg_gasolina95,
              AVG(precio_diesel) as avg_diesel,
              COUNT(*) as count
-      FROM estaciones
-      WHERE snapshot_id = (SELECT id FROM snapshots ORDER BY fecha DESC LIMIT 1)
-        AND precio_gasolina95 IS NOT NULL
+      FROM (
+        SELECT marca, precio_gasolina95, precio_diesel
+        FROM estaciones
+        WHERE snapshot_id = (SELECT id FROM snapshots ORDER BY fecha DESC LIMIT 1)
+          AND precio_gasolina95 IS NOT NULL
+        UNION ALL
+        SELECT marca, precio_gasolina95, precio_diesel
+        FROM snapshot_archivo_estaciones
+        WHERE archivo_id = (SELECT id FROM snapshot_archivos ORDER BY fecha DESC LIMIT 1)
+          AND precio_gasolina95 IS NOT NULL
+      )
       GROUP BY marca
       ORDER BY avg_gasolina95 ASC
       LIMIT 10
@@ -359,13 +465,64 @@ function getTopMarcasPorProvincia(provincia = null) {
  */
 function getHistoricoPorProvincia(provincia) {
   return db.prepare(`
-    SELECT s.fecha, sp.avg_gasolina95, sp.avg_diesel
+    SELECT s.fecha, sp.avg_gasolina95 as gasolina95, sp.avg_diesel as dieselA
     FROM snapshot_precios sp
     JOIN snapshots s ON sp.snapshot_id = s.id
     WHERE sp.provincia = ?
       AND s.fecha >= date('now', '-30 days')
-    ORDER BY s.fecha DESC
-  `).all(provincia);
+    UNION ALL
+    SELECT sa.fecha, sap.avg_gasolina95 as gasolina95, sap.avg_diesel as dieselA
+    FROM snapshot_archivo_precios sap
+    JOIN snapshot_archivos sa ON sap.archivo_id = sa.id
+    WHERE sap.provincia = ?
+      AND sa.fecha >= date('now', '-30 days')
+    ORDER BY fecha DESC
+  `).all(provincia, provincia);
+}
+
+// ============================================================
+// ARCHIVADO DE SNAPSHOTS
+// ============================================================
+
+/**
+ * Archiva todos los snapshots activos restantes antes de iniciar el servidor.
+ * Previene pérdida de datos si el servidor se apaga sin guardar un nuevo snapshot.
+ */
+function archivarSnapshotsActivos() {
+  const activeSnapshots = db.prepare('SELECT id, fecha, fecha_completa, estaciones_count FROM snapshots').all();
+
+  if (activeSnapshots.length === 0) return;
+
+  console.log(`[BD] Archivando ${activeSnapshots.length} snapshot(s) activo(s)...`);
+
+  const insertArchivo = db.prepare('INSERT INTO snapshot_archivos (fecha, fecha_completa, estaciones_count) VALUES (?, ?, ?)');
+  const insertArchivoPrecio = db.prepare('INSERT INTO snapshot_archivo_precios (archivo_id, provincia, avg_gasolina95, avg_diesel, count) VALUES (?, ?, ?, ?, ?)');
+  const insertArchivoEstacion = db.prepare('INSERT INTO snapshot_archivo_estaciones (archivo_id, fecha, provincia, localidad, marca, direccion, lat, lng, precio_gasolina95, precio_diesel) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+
+  for (const snap of activeSnapshots) {
+    // 1) Primero crear el registro en snapshot_archivos y obtener su ID
+    const archivoResult = insertArchivo.run(snap.fecha, snap.fecha_completa, snap.estaciones_count);
+    const archivoId = archivoResult.lastInsertRowid;
+
+    // 2) Archivar precios usando el nuevo archivoId
+    const precios = db.prepare('SELECT provincia, avg_gasolina95, avg_diesel, count FROM snapshot_precios WHERE snapshot_id = ?').all(snap.id);
+    for (const p of precios) {
+      insertArchivoPrecio.run(archivoId, p.provincia, p.avg_gasolina95, p.avg_diesel, p.count);
+    }
+
+    // 3) Archivar estaciones usando el nuevo archivoId
+    const estaciones = db.prepare('SELECT fecha, provincia, localidad, marca, direccion, lat, lng, precio_gasolina95, precio_diesel FROM estaciones WHERE snapshot_id = ?').all(snap.id);
+    for (const e of estaciones) {
+      insertArchivoEstacion.run(archivoId, e.fecha, e.provincia, e.localidad, e.marca, e.direccion, e.lat, e.lng, e.precio_gasolina95, e.precio_diesel);
+    }
+
+    // 4) Eliminar de tablas activas (hijos primero, luego padre)
+    db.prepare('DELETE FROM snapshot_precios WHERE snapshot_id = ?').run(snap.id);
+    db.prepare('DELETE FROM estaciones WHERE snapshot_id = ?').run(snap.id);
+    db.prepare('DELETE FROM snapshots WHERE id = ?').run(snap.id);
+
+    console.log(`[BD] Snapshot ${snap.fecha} archivado`);
+  }
 }
 
 // ============================================================
@@ -559,15 +716,35 @@ app.get('/api/marcas', (req, res) => {
 // Endpoint - info de la BD
 app.get('/api/db/info', (req, res) => {
   try {
-    const totalDias = db.prepare('SELECT COUNT(*) as count FROM snapshots').get().count;
-    const totalEstaciones = db.prepare('SELECT COUNT(*) as count FROM estaciones').get().count;
-    const ultimaFecha = db.prepare("SELECT fecha FROM snapshots ORDER BY fecha DESC LIMIT 1").get();
+    // Contar registros en snapshots activos + archivados
+    const snapsCount = db.prepare(`
+      SELECT COUNT(*) as count FROM (
+        SELECT id FROM snapshots
+        UNION
+        SELECT id FROM snapshot_archivos
+      )
+    `).get();
+
+    const preciosCount = db.prepare(`
+      SELECT COUNT(*) as count FROM (
+        SELECT id FROM snapshot_archivo_precios
+        UNION
+        SELECT id FROM snapshot_precios
+      )
+    `).get();
+
+    const estCount = db.prepare(`
+      SELECT COUNT(*) as count FROM (
+        SELECT id FROM snapshot_archivo_estaciones
+        UNION
+        SELECT id FROM estaciones
+      )
+    `).get();
 
     res.json({
-      totalDias,
-      totalEstaciones,
-      ultimaFecha: ultimaFecha?.fecha || null,
-      dbPath: DB_PATH
+      snapshots: snapsCount.count,
+      precios: preciosCount.count,
+      estaciones: estCount.count
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -577,12 +754,15 @@ app.get('/api/db/info', (req, res) => {
 // ============================================================
 // EXPORTS
 // ============================================================
-module.exports = { app, getCachedData, refreshCache, fetchMineturData, CACHE_DURATION_MS, db, guardarSnapshot, getHistorico, getTopMarcasPorProvincia, getHistoricoPorProvincia };
+module.exports = { app, getCachedData, refreshCache, fetchMineturData, CACHE_DURATION_MS, db, guardarSnapshot, archivarSnapshotsActivos, getHistorico, getTopMarcasPorProvincia, getHistoricoPorProvincia };
 
 // ============================================================
 // INICIAR SERVIDOR (solo si se ejecuta directamente)
 // ============================================================
 if (require.main === module) {
+  // Archivar snapshots activos antes de iniciar el servidor
+  archivarSnapshotsActivos();
+
   app.listen(PORT, () => {
     console.log(`\n🚀 Servidor corriendo en http://localhost:${PORT}`);
     console.log(`📊 Portal: http://localhost:${PORT}/`);
